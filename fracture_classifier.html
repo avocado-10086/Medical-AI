@@ -52,7 +52,7 @@ body::before{
   pointer-events:none;z-index:0;
 }
 
-/* ── NAV ── */
+/* ── NAV ─��� */
 nav{
   position:sticky;top:0;z-index:100;
   background:rgba(8,10,14,0.88);
@@ -654,7 +654,7 @@ const T = {
     nav_title:"골절 지능 진단 시스템",
     hero_badge:"의료 AI · 골절 탐지 시스템",
     hero_h1:"골절 X선 지능 분류",
-    hero_desc:"골절 X선 이미지를 업로드하면 AI가 10종 골절 유형을 실시간으로 인식하고, 이미지 위에 빨간 박스로 골절 부위를 표시합니다. ConvNeXt-Tiny 기반, TTA 정확도 52.29%.",
+    hero_desc:"골절 X선 이미지를 업로드하면 AI가 10종 골절 유형을 실시간으로 인식하고, 이미지 위에 빨간 박스로 골절 부위를 표시합니다. ConvNeXt-Tiny 기반, 멀티모델 비교 실험, TTA 정확도 52.29%.",
     sec_classify:"골절 진단",
     sec_classify_title:"X선 이미지 업로드 후 분류",
     upload_title:"드래그하거나 클릭하여 X선 이미지 업로드",
@@ -880,7 +880,7 @@ function loadImage(file){
   reader.readAsDataURL(file);
 }
 
-// ── Analysis ──────────────────────────────────────────────
+// ── Analysis (调用后端 API) ──────────────────────────────────────────────────
 async function analyzeImage(){
   if(!currentImg) return;
   const t = T[currentLang];
@@ -906,68 +906,19 @@ async function analyzeImage(){
   const imageData = canvas.toDataURL('image/jpeg', 0.85);
   const base64 = imageData.split(',')[1];
 
-  // Call Claude API
+  // Call backend API (instead of Claude API directly)
   try {
-    const prompt = `You are a bone fracture classification AI. Analyze this X-ray image and classify the fracture type.
-
-The 10 possible fracture types are:
-1. Avulsion fracture
-2. Comminuted fracture
-3. Fracture Dislocation
-4. Greenstick fracture
-5. Hairline Fracture
-6. Impacted fracture
-7. Longitudinal fracture
-8. Oblique fracture
-9. Pathological fracture
-10. Spiral Fracture
-
-IMPORTANT: You must respond with ONLY valid JSON, no markdown, no explanation. Use this exact format:
-{
-  "top1": "exact fracture name from the list above",
-  "confidence": 0.XX,
-  "top5": [
-    {"name": "fracture name", "probability": 0.XX},
-    {"name": "fracture name", "probability": 0.XX},
-    {"name": "fracture name", "probability": 0.XX},
-    {"name": "fracture name", "probability": 0.XX},
-    {"name": "fracture name", "probability": 0.XX}
-  ],
-  "bbox": {
-    "x": 0.XX,
-    "y": 0.XX,
-    "w": 0.XX,
-    "h": 0.XX
-  },
-  "reasoning": "brief one-sentence reason"
-}
-
-bbox values are fractions 0-1 of image dimensions (x=left, y=top, w=width, h=height) indicating where the fracture is most visible. Make a reasonable estimate based on the image structure. The probabilities in top5 must sum to approximately 1.0.`;
-
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('/api/analyze-fracture', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 }},
-            { type: 'text', text: prompt }
-          ]
-        }]
-      })
+      body: JSON.stringify({ image: base64 })
     });
 
     clearInterval(stepTimer);
     steps.forEach(s=>{ document.getElementById(s).className='loading-step done'; });
 
-    if(!response.ok) throw new Error('API error ' + response.status);
-    const data = await response.json();
-    const rawText = data.content.filter(b=>b.type==='text').map(b=>b.text).join('');
-    const clean = rawText.replace(/```json|```/g,'').trim();
-    const result = JSON.parse(clean);
+    if(!response.ok) throw new Error(`Server error ${response.status}`);
+    const result = await response.json();
 
     showResults(result);
   } catch(err) {
@@ -1002,73 +953,43 @@ function showResults(result){
     ctx.lineWidth = 3;
     ctx.strokeRect(bx, by, bw, bh);
     ctx.restore();
-
-    // Dashed inner
-    ctx.save();
-    ctx.setLineDash([6,4]);
-    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(bx+3, by+3, bw-6, bh-6);
-    ctx.restore();
-
-    // Corner markers
-    const cs = 14;
-    ctx.save();
-    ctx.strokeStyle = '#ef4444';
-    ctx.lineWidth = 4;
-    ctx.lineCap = 'round';
-    [
-      [bx,by],[bx+bw,by],[bx,by+bh],[bx+bw,by+bh]
-    ].forEach(([cx,cy],i)=>{
-      const dx = i%2===0?1:-1, dy = i<2?1:-1;
-      ctx.beginPath();ctx.moveTo(cx,cy+dy*cs);ctx.lineTo(cx,cy);ctx.lineTo(cx+dx*cs,cy);ctx.stroke();
-    });
-    ctx.restore();
-
-    // Label tag
-    const label = result.top1 || 'Fracture';
-    const shortLabel = label.split(' ').slice(0,2).join(' ');
-    ctx.save();
-    ctx.fillStyle = '#ef4444';
-    const tw = ctx.measureText(shortLabel).width + 20;
-    ctx.fillRect(bx, by - 26, tw, 24);
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 12px Inter,sans-serif';
-    ctx.fillText(shortLabel, bx + 8, by - 9);
-    ctx.restore();
   }
 
-  // Show result panel
-  const panel = document.getElementById('resultsPanel');
-  panel.classList.add('show');
+  // Display results
+  document.getElementById('resultsPanel').classList.add('show');
+  document.getElementById('emptyHint').style.display='none';
 
-  const typeName = result.top1 || 'Unknown';
-  document.getElementById('resultType').textContent = typeName;
-
-  const conf = Math.round((result.confidence || 0.5) * 100);
-  document.getElementById('confVal').textContent = conf + '%';
-  setTimeout(()=>{ document.getElementById('confBar').style.width = conf + '%'; }, 50);
+  // Result type
+  document.getElementById('resultType').textContent = result.top1 || 'Unknown';
+  const conf = result.confidence || 0;
+  document.getElementById('confVal').textContent = (conf * 100).toFixed(1) + '%';
+  document.getElementById('confBar').style.width = (conf * 100) + '%';
 
   // TOP-5
-  const top5El = document.getElementById('top5Grid');
-  if(result.top5 && result.top5.length){
-    top5El.innerHTML = result.top5.map((item,i)=>`
-      <div class="top5-row ${i===0?'first':''}">
-        <span class="top5-rank">${i+1}</span>
-        <span class="top5-name">${item.name}</span>
-        <div class="top5-bar-track"><div class="top5-bar-fill" style="width:${Math.round(item.probability*100)}%"></div></div>
-        <span class="top5-pct">${Math.round(item.probability*100)}%</span>
-      </div>`).join('');
-  }
+  const top5Html = (result.top5 || []).map((item, idx)=>{
+    const pct = item.probability || 0;
+    return `<div class="top5-row${idx===0?' first':''}">
+      <div class="top5-rank">#${idx+1}</div>
+      <div class="top5-name">${item.name}</div>
+      <div class="top5-bar-track">
+        <div class="top5-bar-fill" style="width:${pct*100}%"></div>
+      </div>
+      <div class="top5-pct">${(pct*100).toFixed(1)}%</div>
+    </div>`;
+  }).join('');
+  document.getElementById('top5Grid').innerHTML = top5Html;
 
-  // Description
-  const infoMap = FRACTURE_INFO[currentLang] || FRACTURE_INFO.en;
-  const desc = infoMap[typeName] || infoMap[Object.keys(infoMap).find(k=>typeName.includes(k.split(' ')[0]))] || (result.reasoning || 'Classification completed.');
-  document.getElementById('fractureDesc').textContent = desc;
+  // Fracture info
+  const info = FRACTURE_INFO[currentLang];
+  document.getElementById('fractureDesc').textContent = 
+    info?.[result.top1] || 'No information available';
 }
 
-// Init
-renderFeats('zh');
+// Initialize on page load
+window.addEventListener('load', ()=>{
+  setLang('zh');
+  renderFeats('zh');
+});
 </script>
 </body>
 </html>
